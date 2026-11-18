@@ -1,12 +1,14 @@
 # Compuni
 
-Compuni is an utility package for GNU Emacs 29+ that provides commands to help insert unicode in emacs. Compuni aims to replace the slow and ugly built-in `insert-char` with fast, in-buffer unicode completion. It uses [company](https://company-mode.github.io/) as an ephemeral *(non-persistent)* UI frontend for the in-buffer drop-down menu of options; it does not persist in `company-backends` nor does it require the user to have `company-mode` stay enabled in the buffer.
+Compuni is an utility package for GNU Emacs 29+ that provides commands to help insert unicode in emacs. Compuni aims to replace the slow and ugly built-in `insert-char` with fast, in-buffer unicode completion. It uses [company](https://company-mode.github.io/) as an ephemeral *(non-persistent)* UI frontend for the in-buffer drop-down menu of options; it does not persist in `company-backends` nor does it require the user to keep `company-mode` enabled in the buffer.
 
 Compuni provides two commands for inserting unicode:
 * `compuni-insert-unicode`
 * `compuni-insert-emoji`
 
-Where the latter acts the exact same as the former, but filters out non-emoji symbols from the options. These functions should be bound to your prefered combination of keys to easily and effortlessly insert unicode and emojis in the active buffer. When one of these commands is used, it creates a cache of symbols and font heights to speed up subsequent calls. Thus, compuni also provides a `compuni-clear-cache` function to free up that space.
+Where the latter acts the exact same as the former, but filters out non-emoji symbols from the options. These functions should be bound to your prefered combination of keys to easily and effortlessly insert unicode and emojis in the active buffer.
+
+When one of these commands is used, it creates a cache of symbols and font heights to speed up subsequent calls. Thus, compuni also provides a `compuni-clear-cache` function to free up that space.
 
 ## Usage
 Compuni isn't on any package repositories yet, so you gotta clone this repo and load it yourself.
