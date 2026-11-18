@@ -70,8 +70,27 @@
 
 (ert-deftest compuni-test-filter-ignores-glyph-column ()
   (compuni-test--with-sample-buffer buf
-    ;; Searching for the literal glyph itself should not match the name column.
     (should-not (car (compuni--filter-buffer "λ" buf 50)))))
+
+;;; Match Highlighting & Annotation Tests
+
+(ert-deftest compuni-test-match-regions-multi-word-and-repeated ()
+  ;; "greek small letter lambda": "small" is (6 . 11), "lambda" is (19 . 25).
+  (should (equal (compuni--match-regions "greek small letter lambda" '("lambda" "small"))
+                 '((6 . 11) (19 . 25))))
+  ;; Repeated occurrences of the same term are all highlighted.
+  (should (equal (compuni--match-regions "lambda" '("a"))
+                 '((1 . 2) (5 . 6))))
+  ;; Overlapping/adjacent terms merge cleanly.
+  (should (equal (compuni--match-regions "lambda" '("lam" "amb"))
+                 '((0 . 4)))))
+
+(ert-deftest compuni-test-sanitize-glyph-for-display ()
+  (should (equal (compuni--sanitize-glyph-for-display "λ") "λ"))
+  (should (equal (compuni--sanitize-glyph-for-display "\n") "·"))
+  (should (equal (compuni--sanitize-glyph-for-display "\t") "·"))
+  ;; Combining acute accent (U+0301) is anchored to dotted circle.
+  (should (equal (compuni--sanitize-glyph-for-display "\u0301") "◌\u0301")))
 
 ;;; Incremental Narrowing Tests
 
@@ -84,14 +103,11 @@
                   (lambda (&rest args)
                     (setq buffer-scans (1+ buffer-scans))
                     (apply orig args))))
-        ;; 1. Initial query scans the buffer (2 matches < 50 -> complete = t).
         (should (= (length (compuni--query-session "lambda" session)) 2))
         (should (= buffer-scans 1))
-        ;; 2. Narrowing adds " small" -> served from in-memory cache, no buffer scan.
         (should (equal (compuni--query-session "lambda small" session)
                        '("greek small letter lambda")))
         (should (= buffer-scans 1))
-        ;; 3. Widening (backspace to "lambda") -> rescans buffer.
         (should (= (length (compuni--query-session "lambda" session)) 2))
         (should (= buffer-scans 2))))))
 
@@ -99,10 +115,8 @@
   (compuni-test--with-sample-buffer buf
     (let ((compuni-max-candidates 2)
           (session (make-compuni--session :buffer buf)))
-      ;; "a" matches 4 entries, truncated to 2 (last-complete = nil).
       (should (= (length (compuni--query-session "a" session)) 2))
       (should-not (compuni--session-last-complete session))
-      ;; Narrowing to "arrow" must rescan buffer so entries 3 & 4 aren't lost.
       (let ((res (compuni--query-session "arrow" session)))
         (should (= (length res) 2))
         (should (member "rightwards arrow" res))
@@ -110,57 +124,17 @@
 
 ;;; Data Provider & Performance Tests
 
-(ert-deftest compuni-test-unicode-buffer-loads-caches-and-excludes-cjk ()
+(ert-deftest compuni-test-unicode-buffer-loads-and-caches ()
   (compuni-clear-cache)
-  (let ((compuni-exclude-cjk-ideographs t))
-    (should (compuni--excluded-unicode-name-p "CJK UNIFIED IDEOGRAPH-4E00"))
-    (should (compuni--excluded-unicode-name-p "CJK COMPATIBILITY IDEOGRAPH-F900"))
-    (should (compuni--excluded-unicode-name-p "HANGUL SYLLABLE GA"))
-    (should-not (compuni--excluded-unicode-name-p "GREEK SMALL LETTER LAMBDA"))
-    (let* ((buf1 (compuni--get-unicode-buffer))
-           (buf2 (compuni--get-unicode-buffer))
-           (res (car (compuni--filter-buffer "greek small letter lambda" buf1 50))))
-      (should (eq buf1 buf2))
-      (should (member "greek small letter lambda" res))
-      (should (equal (get-text-property 0 'compuni-char
-                                        (car (member "greek small letter lambda" res)))
-                     "λ"))
-      ;; Explicit CJK compatibility ideographs are excluded by default.
-      (should-not (member "cjk compatibility ideograph-f900"
-                          (car (compuni--filter-buffer "cjk compatibility ideograph-f900" buf1 5))))))
-  ;; Toggling exclusion off includes them after cache clear.
-  (compuni-clear-cache)
-  (let ((compuni-exclude-cjk-ideographs nil))
-    (let ((buf (compuni--get-unicode-buffer)))
-      (should (member "cjk compatibility ideograph-f900"
-                      (car (compuni--filter-buffer "cjk compatibility ideograph-f900" buf 5))))))
-  (compuni-clear-cache))
-
-(ert-deftest compuni-test-start-survives-preexisting-company-session ()
-  ;; Regression test: if company already has an active completion when
-  ;; `compuni--start' is invoked, cancelling it must not wipe the new session.
-  (compuni-test--with-sample-buffer buf
-    (with-temp-buffer
-      (insert "lambda")
-      (company-mode 1)
-      (let ((cancelled-prior nil))
-        (cl-letf (((symbol-function 'company-cancel)
-                   (lambda (&rest _)
-                     (unless cancelled-prior
-                       (setq cancelled-prior t)
-                       (run-hook-with-args 'company-after-completion-hook nil))))
-                  ((symbol-function 'company-begin-backend)
-                   (lambda (_backend)
-                     (company-cancel)
-                     (should compuni--active-session)
-                     (should (equal (compuni--company-backend 'prefix) '("lambda" . t)))
-                     (setq company-candidates
-                           (compuni--company-backend 'candidates "lambda")))))
-          (compuni--start (lambda () buf))
-          (should cancelled-prior)
-          (should compuni--active-session)
-          (should (= (length company-candidates) 2))
-          (compuni--cleanup))))))
+  (let* ((buf1 (compuni--get-unicode-buffer))
+         (buf2 (compuni--get-unicode-buffer))
+         (res (car (compuni--filter-buffer "greek small letter lambda" buf1 50))))
+    (should (eq buf1 buf2))
+    (should (> (buffer-size buf1) 10000))
+    (should (member "greek small letter lambda" res))
+    (should (equal (get-text-property 0 'compuni-char
+                                      (car (member "greek small letter lambda" res)))
+                   "λ"))))
 
 (ert-deftest compuni-test-emoji-buffer-loads-and-caches ()
   (compuni-clear-cache)
@@ -174,13 +148,11 @@
 
 (ert-deftest compuni-test-unicode-search-latency ()
   (compuni-clear-cache)
-  (let* ((compuni-exclude-cjk-ideographs t)
-         (buf (compuni--get-unicode-buffer))
+  (let* ((buf (compuni--get-unicode-buffer))
          (start (float-time))
          (res (car (compuni--filter-buffer "lambda small" buf 50)))
          (elapsed-ms (* 1000.0 (- (float-time) start))))
     (should (member "greek small letter lambda" res))
-    ;; Full scan over ~35k entries should comfortably stay under 100ms even uncompiled.
     (should (< elapsed-ms 100.0))))
 
 ;;; Backend Protocol Tests
@@ -199,12 +171,19 @@
         (goto-char 3)
         (should-not (compuni--company-backend 'prefix))))))
 
-(ert-deftest compuni-test-backend-metadata-and-annotation ()
-  (let ((cand (compuni--make-candidate "greek small letter lambda" "λ"))
-        (compuni-annotation-format "  [%s]"))
-    (should (eq (compuni--company-backend 'no-cache) t))
-    (should (eq (compuni--company-backend 'ignore-case) t))
-    (should (equal (compuni--company-backend 'annotation cand) "  [λ]"))))
+(ert-deftest compuni-test-backend-metadata-match-and-annotation ()
+  (compuni-test--with-sample-buffer buf
+    (let ((cand (compuni--make-candidate "greek small letter lambda" "λ"))
+          (compuni-annotation-format "  [%s]")
+          (compuni--active-session
+           (make-compuni--session :buffer buf
+                                  :last-terms '("lambda" "small"))))
+      (should (eq (compuni--company-backend 'no-cache) t))
+      (should (eq (compuni--company-backend 'ignore-case) t))
+      (should (equal (compuni--company-backend 'match cand)
+                     '((6 . 11) (19 . 25))))
+      (should (equal (substring-no-properties (compuni--company-backend 'annotation cand))
+                     "  [λ]")))))
 
 (ert-deftest compuni-test-backend-post-completion-replaces-text ()
   (compuni-test--with-sample-buffer buf
@@ -295,6 +274,30 @@
         (should (equal (compuni--company-backend 'prefix) '("lambda small" . t)))
         (should-not (use-region-p))
         (compuni--cleanup)))))
+
+(ert-deftest compuni-test-start-survives-preexisting-company-session ()
+  (compuni-test--with-sample-buffer buf
+    (with-temp-buffer
+      (insert "lambda")
+      (company-mode 1)
+      (let ((cancelled-prior nil))
+        (cl-letf (((symbol-function 'company-cancel)
+                   (lambda (&rest _)
+                     (unless cancelled-prior
+                       (setq cancelled-prior t)
+                       (run-hook-with-args 'company-after-completion-hook nil))))
+                  ((symbol-function 'company-begin-backend)
+                   (lambda (_backend)
+                     (company-cancel)
+                     (should compuni--active-session)
+                     (should (equal (compuni--company-backend 'prefix) '("lambda" . t)))
+                     (setq company-candidates
+                           (compuni--company-backend 'candidates "lambda")))))
+          (compuni--start (lambda () buf))
+          (should cancelled-prior)
+          (should compuni--active-session)
+          (should (= (length company-candidates) 2))
+          (compuni--cleanup))))))
 
 (provide 'compuni-test)
 

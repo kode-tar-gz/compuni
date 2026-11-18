@@ -1,6 +1,6 @@
 ;;; compuni.el --- Ephemeral company-mode Unicode and Emoji insertion -*- lexical-binding: t; -*-
 
-;; Version: 0.2.0
+;; Version: 0.3.0
 ;; Package-Requires: ((emacs "29.1") (company "0.9.13"))
 ;; Keywords: convenience, unicode, emoji, completion
 
@@ -22,7 +22,7 @@
 (defvar emoji--names)
 (declare-function emoji--init "emoji")
 
-;;; Customization
+;;; Customization & Faces
 
 (defgroup compuni nil
   "Ephemeral company-mode completion for Unicode characters and Emojis."
@@ -39,16 +39,12 @@
   :type 'string
   :group 'compuni)
 
-(defcustom compuni-exclude-cjk-ideographs t
-  "When non-nil, exclude algorithmically named CJK/Hangul/Tangut ideographs.
-This reduces the Unicode dataset from ~145,000 to ~35,000 entries while
-keeping symbols, math/Greek letters, arrows, punctuation, and scripts."
-  :type 'boolean
-  :group 'compuni
-  :set (lambda (sym val)
-         (set-default sym val)
-         (when (fboundp 'compuni-clear-cache)
-           (compuni-clear-cache))))
+(defface compuni-glyph-face
+  '((t :height 0.85))
+  "Face used for Unicode/Emoji glyphs in the `company' popup annotation.
+Scaling slightly below 1.0 prevents taller fallback symbol/emoji fonts
+from inflating line height and clipping the bottom of the popup."
+  :group 'compuni)
 
 ;;; Data Providers (Lazy-Loaded Hidden Buffers)
 
@@ -68,14 +64,6 @@ keeping symbols, math/Greek letters, arrows, punctuation, and scripts."
 (defun compuni--make-candidate (name char)
   "Create a propertized candidate string from downcased NAME and CHAR."
   (propertize (downcase name) 'compuni-char char))
-
-(defun compuni--excluded-unicode-name-p (name)
-  "Return non-nil if Unicode NAME should be excluded from the cache."
-  (and compuni-exclude-cjk-ideographs
-       (or (string-prefix-p "CJK UNIFIED IDEOGRAPH-" name)
-           (string-prefix-p "CJK COMPATIBILITY IDEOGRAPH-" name)
-           (string-prefix-p "HANGUL SYLLABLE " name)
-           (string-prefix-p "TANGUT IDEOGRAPH-" name))))
 
 (defun compuni--get-or-build-buffer (buffer-name populate-fn)
   "Return cached BUFFER-NAME, populating it via POPULATE-FN if needed."
@@ -97,9 +85,7 @@ keeping symbols, math/Greek letters, arrows, punctuation, and scripts."
    (lambda ()
      (maphash
       (lambda (name codepoint)
-        (when (and (stringp name)
-                   (characterp codepoint)
-                   (not (compuni--excluded-unicode-name-p name)))
+        (when (and (stringp name) (characterp codepoint))
           (insert (downcase name) "\t" (char-to-string codepoint) "\n")))
       (ucs-names)))))
 
@@ -138,6 +124,62 @@ keeping symbols, math/Greek letters, arrows, punctuation, and scripts."
                              (goto-char (+ (point) (length needle))))
                         (search-forward (concat "\n" needle) nil t))
                 (buffer-substring-no-properties (point) (line-end-position)))))))))
+
+;;; Annotation Rendering & Match Highlighting
+
+(defun compuni--sanitize-glyph-for-display (char-str)
+  "Return a popup-safe display representation of CHAR-STR.
+Control/line-breaking characters are replaced with a placeholder and
+combining marks are anchored onto a dotted circle."
+  (if (= (length char-str) 1)
+      (let* ((ch (aref char-str 0))
+             (cat (get-char-code-property ch 'general-category)))
+        (cond
+         ((or (< ch 32) (= ch 127) (memq cat '(Cc Cf Zl Zp))) "·")
+         ((memq cat '(Mn Mc Me)) (concat "◌" char-str))
+         (t char-str)))
+    char-str))
+
+(defun compuni--format-annotation (char-str)
+  "Format CHAR-STR as a pixel-aligned `company' annotation."
+  (let ((safe (compuni--sanitize-glyph-for-display char-str)))
+    (if (not (display-graphic-p))
+        (format compuni-annotation-format safe)
+      (let* ((styled (propertize safe 'face 'compuni-glyph-face))
+             (col-px (max 1 (frame-char-width)))
+             (glyph-px (string-pixel-width styled))
+             (reported-cols (string-width styled))
+             ;; Ensure reported column width * col-px >= glyph-px with >= 1 pad col.
+             (needed-cols (ceiling (/ (float glyph-px) col-px)))
+             (pad-cols (max 1 (- needed-cols reported-cols)))
+             (pad-px (max 0 (- (* (+ reported-cols pad-cols) col-px) glyph-px)))
+             (spacer (propertize (make-string pad-cols ?\s)
+                                 'display `(space :width (,pad-px)))))
+        (format compuni-annotation-format (concat styled spacer))))))
+
+(defun compuni--match-regions (candidate terms)
+  "Return sorted, merged list of (BEG . END) match intervals for TERMS in CANDIDATE."
+  (when terms
+    (let ((haystack (downcase candidate))
+          (regions nil))
+      (dolist (term terms)
+        (unless (string-empty-p term)
+          (let ((pos 0)
+                (tlen (length term)))
+            (while (setq pos (string-search term haystack pos))
+              (push (cons pos (+ pos tlen)) regions)
+              (setq pos (+ pos tlen))))))
+      (when regions
+        (setq regions (sort regions (lambda (a b)
+                                      (or (< (car a) (car b))
+                                          (and (= (car a) (car b))
+                                               (< (cdr a) (cdr b)))))))
+        (let ((merged (list (car regions))))
+          (dolist (r (cdr regions))
+            (if (<= (car r) (cdar merged))
+                (setcdr (car merged) (max (cdar merged) (cdr r)))
+              (push r merged)))
+          (nreverse merged))))))
 
 ;;; Search Engine (C-Level Buffer Scan + Incremental Narrowing)
 
@@ -270,9 +312,14 @@ COMMAND and ARG follow the standard `company-backends' protocol."
     (candidates
      (when compuni--active-session
        (compuni--query-session arg compuni--active-session)))
+    (match
+     (when compuni--active-session
+       (compuni--match-regions
+        arg
+        (compuni--session-last-terms compuni--active-session))))
     (annotation
      (when-let* ((char (compuni--candidate-char arg)))
-       (format compuni-annotation-format char)))
+       (compuni--format-annotation char)))
     (post-completion
      (when compuni--active-session
        (let ((start (compuni--session-start-marker compuni--active-session))
