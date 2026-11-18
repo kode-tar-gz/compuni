@@ -1,6 +1,6 @@
 # Compuni
 
-Compuni is a utility package for GNU Emacs 29+ that provides commands to help insert unicode in emacs. Compuni aims to replace the slow and ugly built-in `insert-char` with fast, in-buffer unicode completion. It uses [company]() as an ephemeral *(non-persistent)* UI frontend for the in-buffer drop-down menu of options; it does not persist in `company-backends` nor does it require the user to have `company-mode` stay enabled in the buffer.
+Compuni is an utility package for GNU Emacs 29+ that provides commands to help insert unicode in emacs. Compuni aims to replace the slow and ugly built-in `insert-char` with fast, in-buffer unicode completion. It uses [company]() as an ephemeral *(non-persistent)* UI frontend for the in-buffer drop-down menu of options; it does not persist in `company-backends` nor does it require the user to have `company-mode` stay enabled in the buffer.
 
 Compuni provides two commands for inserting unicode:
 * `compuni-insert-unicode`
@@ -22,7 +22,7 @@ Example configuration with `use-package`:
   (compuni-max-candidates 50))
 ```
 
-![compuni in action](https://github.com/user-attachments/assets/4bdfb2b1-e58a-459c-be42-6e9df9e99312)
+![https://github.com/user-attachments/assets/](https://github.com/user-attachments/assets/4bdfb2b1-e58a-459c-be42-6e9df9e99312)
 
 ## Customization
 Compuni can be customized through these two variable:
