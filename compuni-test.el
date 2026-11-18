@@ -72,16 +72,13 @@
   (compuni-test--with-sample-buffer buf
     (should-not (car (compuni--filter-buffer "λ" buf 50)))))
 
-;;; Match Highlighting & Annotation Tests
+;;; Match Highlighting & Margin Tests
 
 (ert-deftest compuni-test-match-regions-multi-word-and-repeated ()
-  ;; "greek small letter lambda": "small" is (6 . 11), "lambda" is (19 . 25).
   (should (equal (compuni--match-regions "greek small letter lambda" '("lambda" "small"))
                  '((6 . 11) (19 . 25))))
-  ;; Repeated occurrences of the same term are all highlighted.
   (should (equal (compuni--match-regions "lambda" '("a"))
                  '((1 . 2) (5 . 6))))
-  ;; Overlapping/adjacent terms merge cleanly.
   (should (equal (compuni--match-regions "lambda" '("lam" "amb"))
                  '((0 . 4)))))
 
@@ -89,8 +86,35 @@
   (should (equal (compuni--sanitize-glyph-for-display "λ") "λ"))
   (should (equal (compuni--sanitize-glyph-for-display "\n") "·"))
   (should (equal (compuni--sanitize-glyph-for-display "\t") "·"))
-  ;; Combining acute accent (U+0301) is anchored to dotted circle.
   (should (equal (compuni--sanitize-glyph-for-display "\u0301") "◌\u0301")))
+
+(ert-deftest compuni-test-format-margin-tty-and-gui ()
+  (let ((cand (compuni--make-candidate "greek small letter lambda" "λ")))
+    ;; Terminal mode: padding uses tooltip face, glyph uses annotation face.
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) nil)))
+      (let ((m (compuni--format-margin cand nil)))
+        (should (equal (substring-no-properties m) " λ "))
+        (should (eq (get-text-property 0 'face m) 'company-tooltip))
+        (should (equal (get-text-property 1 'face m)
+                       '(company-tooltip-annotation company-tooltip))))
+      (let ((m-sel (compuni--format-margin cand t)))
+        (should (eq (get-text-property 0 'face m-sel) 'company-tooltip-selection))
+        (should (equal (get-text-property 1 'face m-sel)
+                       '(company-tooltip-annotation-selection company-tooltip-selection)))))
+    ;; GUI mode: glyph uses compuni-glyph-face + annotation face + pixel-padded spacer.
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t))
+              ((symbol-function 'string-pixel-width) (lambda (_s) 8)))
+      (let ((m (compuni--format-margin cand nil)))
+        (should (equal (substring-no-properties m) " λ "))
+        (should (equal (get-text-property 1 'face m)
+                       '(compuni-glyph-face company-tooltip-annotation company-tooltip)))
+        (should (equal (get-text-property 2 'display m)
+                       '(space :width (16)))))
+      (let ((m-sel (compuni--format-margin cand t)))
+        (should (equal (get-text-property 1 'face m-sel)
+                       '(compuni-glyph-face
+                         company-tooltip-annotation-selection
+                         company-tooltip-selection)))))))
 
 ;;; Incremental Narrowing Tests
 
@@ -171,19 +195,16 @@
         (goto-char 3)
         (should-not (compuni--company-backend 'prefix))))))
 
-(ert-deftest compuni-test-backend-metadata-match-and-annotation ()
+(ert-deftest compuni-test-backend-metadata-and-match ()
   (compuni-test--with-sample-buffer buf
     (let ((cand (compuni--make-candidate "greek small letter lambda" "λ"))
-          (compuni-annotation-format "  [%s]")
           (compuni--active-session
            (make-compuni--session :buffer buf
                                   :last-terms '("lambda" "small"))))
       (should (eq (compuni--company-backend 'no-cache) t))
       (should (eq (compuni--company-backend 'ignore-case) t))
       (should (equal (compuni--company-backend 'match cand)
-                     '((6 . 11) (19 . 25))))
-      (should (equal (substring-no-properties (compuni--company-backend 'annotation cand))
-                     "  [λ]")))))
+                     '((6 . 11) (19 . 25)))))))
 
 (ert-deftest compuni-test-backend-post-completion-replaces-text ()
   (compuni-test--with-sample-buffer buf
@@ -214,12 +235,16 @@
           (should (bound-and-true-p company-mode))
           (should compuni--active-session)
           (should (equal company-backends orig-backends))
+          (when (boundp 'company-format-margin-function)
+            (should (eq company-format-margin-function #'compuni--format-margin)))
           (should (memq #'compuni--cleanup company-after-completion-hook))
           (let ((marker (compuni--session-start-marker compuni--active-session)))
             (run-hook-with-args 'company-after-completion-hook nil)
             (should-not (bound-and-true-p company-mode))
             (should-not compuni--active-session)
             (should-not (marker-position marker))
+            (when (boundp 'company-format-margin-function)
+              (should-not (local-variable-p 'company-format-margin-function)))
             (should-not (memq #'compuni--cleanup company-after-completion-hook))))))))
 
 (ert-deftest compuni-test-lifecycle-preserves-company-mode-on ()

@@ -1,6 +1,6 @@
 ;;; compuni.el --- Ephemeral company-mode Unicode and Emoji insertion -*- lexical-binding: t; -*-
 
-;; Version: 0.3.0
+;; Version: 0.4.0
 ;; Package-Requires: ((emacs "29.1") (company "0.9.13"))
 ;; Keywords: convenience, unicode, emoji, completion
 
@@ -35,13 +35,13 @@
   :group 'compuni)
 
 (defcustom compuni-annotation-format "  %s"
-  "Format string used to display the character next to its name in the popup."
+  "Fallback annotation format when `company-format-margin-function' is unavailable."
   :type 'string
   :group 'compuni)
 
 (defface compuni-glyph-face
   '((t :height 0.85))
-  "Face used for Unicode/Emoji glyphs in the `company' popup annotation.
+  "Face used for Unicode/Emoji glyphs in the `company' popup margin.
 Scaling slightly below 1.0 prevents taller fallback symbol/emoji fonts
 from inflating line height and clipping the bottom of the popup."
   :group 'compuni)
@@ -125,7 +125,7 @@ from inflating line height and clipping the bottom of the popup."
                         (search-forward (concat "\n" needle) nil t))
                 (buffer-substring-no-properties (point) (line-end-position)))))))))
 
-;;; Annotation Rendering & Match Highlighting
+;;; Margin Rendering & Match Highlighting
 
 (defun compuni--sanitize-glyph-for-display (char-str)
   "Return a popup-safe display representation of CHAR-STR.
@@ -140,22 +140,31 @@ combining marks are anchored onto a dotted circle."
          (t char-str)))
     char-str))
 
-(defun compuni--format-annotation (char-str)
-  "Format CHAR-STR as a pixel-aligned `company' annotation."
-  (let ((safe (compuni--sanitize-glyph-for-display char-str)))
+(defun compuni--format-margin (candidate selected)
+  "Format the left margin of a `company' tooltip line with CANDIDATE's glyph.
+SELECTED is non-nil when CANDIDATE is the currently highlighted item.
+On GUI frames, pads every margin to a constant pixel width so the
+tooltip's right scrollbar stays straight."
+  (let* ((base-face (if selected 'company-tooltip-selection 'company-tooltip))
+         (annot-face (if selected
+                         'company-tooltip-annotation-selection
+                       'company-tooltip-annotation))
+         (char (or (compuni--candidate-char candidate) " "))
+         (safe (compuni--sanitize-glyph-for-display char)))
     (if (not (display-graphic-p))
-        (format compuni-annotation-format safe)
-      (let* ((styled (propertize safe 'face 'compuni-glyph-face))
-             (col-px (max 1 (frame-char-width)))
-             (glyph-px (string-pixel-width styled))
-             (reported-cols (string-width styled))
-             ;; Ensure reported column width * col-px >= glyph-px with >= 1 pad col.
-             (needed-cols (ceiling (/ (float glyph-px) col-px)))
-             (pad-cols (max 1 (- needed-cols reported-cols)))
-             (pad-px (max 0 (- (* (+ reported-cols pad-cols) col-px) glyph-px)))
-             (spacer (propertize (make-string pad-cols ?\s)
-                                 'display `(space :width (,pad-px)))))
-        (format compuni-annotation-format (concat styled spacer))))))
+        (concat (propertize " " 'face base-face)
+                (propertize safe 'face (list annot-face base-face))
+                (propertize " " 'face base-face))
+      (let* ((col-px (max 1 (string-pixel-width (propertize " " 'face base-face))))
+             (target-px (* 3 col-px))
+             (glyph (propertize safe 'face (list 'compuni-glyph-face annot-face base-face)))
+             (glyph-px (string-pixel-width glyph))
+             (pad-px (max 0 (- target-px glyph-px)))
+             (lead (propertize " " 'face base-face))
+             (trail (propertize " "
+                                'face base-face
+                                'display `(space :width (,pad-px)))))
+        (concat lead glyph trail)))))
 
 (defun compuni--match-regions (candidate terms)
   "Return sorted, merged list of (BEG . END) match intervals for TERMS in CANDIDATE."
@@ -251,6 +260,8 @@ if the entire buffer was scanned without hitting the limit."
   buffer
   start-marker
   prev-company-mode
+  prev-margin-local
+  prev-margin-fn
   last-terms
   last-matches
   last-complete)
@@ -291,9 +302,15 @@ if the entire buffer was scanned without hitting the limit."
   (remove-hook 'company-after-completion-hook #'compuni--cleanup t)
   (when compuni--active-session
     (let ((marker (compuni--session-start-marker compuni--active-session))
-          (was-active (compuni--session-prev-company-mode compuni--active-session)))
+          (was-active (compuni--session-prev-company-mode compuni--active-session))
+          (margin-local (compuni--session-prev-margin-local compuni--active-session))
+          (margin-fn (compuni--session-prev-margin-fn compuni--active-session)))
       (when (markerp marker)
         (set-marker marker nil))
+      (when (boundp 'company-format-margin-function)
+        (if margin-local
+            (setq-local company-format-margin-function margin-fn)
+          (kill-local-variable 'company-format-margin-function)))
       (setq compuni--active-session nil)
       (unless was-active
         (company-mode -1)))))
@@ -318,8 +335,11 @@ COMMAND and ARG follow the standard `company-backends' protocol."
         arg
         (compuni--session-last-terms compuni--active-session))))
     (annotation
-     (when-let* ((char (compuni--candidate-char arg)))
-       (compuni--format-annotation char)))
+     ;; Only used as a fallback if `company-format-margin-function' is unavailable.
+     (unless (boundp 'company-format-margin-function)
+       (when-let* ((char (compuni--candidate-char arg)))
+         (format compuni-annotation-format
+                 (compuni--sanitize-glyph-for-display char)))))
     (post-completion
      (when compuni--active-session
        (let ((start (compuni--session-start-marker compuni--active-session))
@@ -341,6 +361,10 @@ COMMAND and ARG follow the standard `company-backends' protocol."
          (start (car bounds))
          (end (cdr bounds))
          (was-active (bound-and-true-p company-mode))
+         (margin-local (and (boundp 'company-format-margin-function)
+                            (local-variable-p 'company-format-margin-function)))
+         (margin-fn (and (boundp 'company-format-margin-function)
+                         company-format-margin-function))
          (dataset-buf (funcall buffer-fn)))
     (when (use-region-p)
       (deactivate-mark))
@@ -353,7 +377,11 @@ COMMAND and ARG follow the standard `company-backends' protocol."
     (setq compuni--active-session
           (make-compuni--session :buffer dataset-buf
                                  :start-marker (copy-marker start)
-                                 :prev-company-mode was-active))
+                                 :prev-company-mode was-active
+                                 :prev-margin-local margin-local
+                                 :prev-margin-fn margin-fn))
+    (when (boundp 'company-format-margin-function)
+      (setq-local company-format-margin-function #'compuni--format-margin))
     (add-hook 'company-after-completion-hook #'compuni--cleanup nil t)
     (unless was-active
       (company-mode 1))
