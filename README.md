@@ -5,6 +5,7 @@ Compuni is an utility package for GNU Emacs 29+ that provides commands to help i
 Compuni provides two commands for inserting unicode:
 * `compuni-insert-unicode`
 * `compuni-insert-emoji`
+
 Where the latter acts the exact same as the former, but filters out non-emoji symbols from the options. These functions should be bound to your prefered combination of keys to easily and effortlessly insert unicode and emojis in the active buffer. When one of these commands is used, it creates a cache of symbols and font heights to speed up subsequent calls. Thus, compuni also provides a `compuni-clear-cache` function to free up that space.
 
 ## Usage
@@ -21,6 +22,8 @@ Example configuration with `use-package`:
   :custom
   (compuni-max-candidates 50))
 ```
+
+Compuni in action:
 
 [https://github.com/user-attachments/assets/](https://github.com/user-attachments/assets/4bdfb2b1-e58a-459c-be42-6e9df9e99312)
 
