@@ -40,11 +40,12 @@
   :group 'compuni)
 
 (defface compuni-glyph-face
-  '((t :height 0.85))
-  "Face used for Unicode/Emoji glyphs in the `company' popup margin.
-Scaling slightly below 1.0 prevents taller fallback symbol/emoji fonts
-from inflating line height and clipping the bottom of the popup."
+  '((t))
+  "Face used for Unicode/Emoji glyphs in the `company' popup margin."
   :group 'compuni)
+
+(defvar compuni--font-height-cache (make-hash-table :test #'equal)
+  "Cache mapping font names to their pixel heights.")
 
 ;;; Data Providers (Lazy-Loaded Hidden Buffers)
 
@@ -57,6 +58,7 @@ from inflating line height and clipping the bottom of the popup."
 (defun compuni-clear-cache ()
   "Clear cached Unicode and Emoji buffers so they rebuild on next use."
   (interactive)
+  (clrhash compuni--font-height-cache)
   (dolist (name (list compuni--unicode-buffer-name compuni--emoji-buffer-name))
     (when-let* ((buf (get-buffer name)))
       (kill-buffer buf))))
@@ -140,11 +142,38 @@ combining marks are anchored onto a dotted circle."
          (t char-str)))
     char-str))
 
+(defun compuni--font-pixel-height (font-name)
+  "Return the cached pixel height of FONT-NAME, or nil if unavailable."
+  (when font-name
+    (let ((cached (gethash font-name compuni--font-height-cache 'missing)))
+      (if (not (eq cached 'missing))
+          cached
+        (let* ((info (font-info font-name))
+               (height (and (vectorp info)
+                            (> (length info) 3)
+                            (numberp (aref info 3))
+                            (> (aref info 3) 0)
+                            (aref info 3))))
+          (puthash font-name height compuni--font-height-cache))))))
+
+(defun compuni--target-line-height ()
+  "Return the target pixel line height for `company-tooltip'."
+  (or (compuni--font-pixel-height (face-font 'company-tooltip nil ?a))
+      (frame-char-height)))
+
+(defun compuni--glyph-scale-for-char (char target-px)
+  "Return a `:height' scale factor so CHAR fits in TARGET-PX, or nil if it already fits."
+  (when-let* ((font-name (face-font 'company-tooltip nil char))
+              (font-px (compuni--font-pixel-height font-name)))
+    (when (> font-px target-px)
+      (max 0.45 (/ (float target-px) font-px)))))
+
 (defun compuni--format-margin (candidate selected)
   "Format the left margin of a `company' tooltip line with CANDIDATE's glyph.
 SELECTED is non-nil when CANDIDATE is the currently highlighted item.
-On GUI frames, pads every margin to a constant pixel width so the
-tooltip's right scrollbar stays straight."
+On GUI frames, scales oversized fallback fonts to match tooltip line height
+and pads every margin to a constant pixel width so the right scrollbar
+stays straight."
   (let* ((base-face (if selected 'company-tooltip-selection 'company-tooltip))
          (annot-face (if selected
                          'company-tooltip-annotation-selection
@@ -157,7 +186,14 @@ tooltip's right scrollbar stays straight."
                 (propertize " " 'face base-face))
       (let* ((col-px (max 1 (string-pixel-width (propertize " " 'face base-face))))
              (target-px (* 3 col-px))
-             (glyph (propertize safe 'face (list 'compuni-glyph-face annot-face base-face)))
+             (scale (and (not (string-empty-p safe))
+                         (compuni--glyph-scale-for-char
+                          (aref safe 0) (compuni--target-line-height))))
+             (glyph-face (if scale
+                             (list (list :height scale)
+                                   'compuni-glyph-face annot-face base-face)
+                           (list 'compuni-glyph-face annot-face base-face)))
+             (glyph (propertize safe 'face glyph-face))
              (glyph-px (string-pixel-width glyph))
              (pad-px (max 0 (- target-px glyph-px)))
              (lead (propertize " " 'face base-face))

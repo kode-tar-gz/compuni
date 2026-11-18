@@ -88,9 +88,30 @@
   (should (equal (compuni--sanitize-glyph-for-display "\t") "·"))
   (should (equal (compuni--sanitize-glyph-for-display "\u0301") "◌\u0301")))
 
+(ert-deftest compuni-test-glyph-scale-for-char ()
+  (clrhash compuni--font-height-cache)
+  (cl-letf (((symbol-function 'face-font)
+             (lambda (_face &optional _frame ch)
+               (pcase ch
+                 (?a "mono-16")
+                 (?λ "symbol-32")
+                 (?😀 "emoji-64"))))
+            ((symbol-function 'font-info)
+             (lambda (name)
+               (pcase name
+                 ("mono-16" [nil nil 16 16])
+                 ("symbol-32" [nil nil 32 32])
+                 ("emoji-64" [nil nil 64 64])))))
+    ;; Already fits -> nil (no scaling).
+    (should-not (compuni--glyph-scale-for-char ?a 16))
+    ;; 2x taller -> scaled to 0.5.
+    (should (= (compuni--glyph-scale-for-char ?λ 16) 0.5))
+    ;; 4x taller -> clamped at minimum 0.45.
+    (should (= (compuni--glyph-scale-for-char ?😀 16) 0.45)))
+  (clrhash compuni--font-height-cache))
+
 (ert-deftest compuni-test-format-margin-tty-and-gui ()
   (let ((cand (compuni--make-candidate "greek small letter lambda" "λ")))
-    ;; Terminal mode: padding uses tooltip face, glyph uses annotation face.
     (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) nil)))
       (let ((m (compuni--format-margin cand nil)))
         (should (equal (substring-no-properties m) " λ "))
@@ -101,20 +122,20 @@
         (should (eq (get-text-property 0 'face m-sel) 'company-tooltip-selection))
         (should (equal (get-text-property 1 'face m-sel)
                        '(company-tooltip-annotation-selection company-tooltip-selection)))))
-    ;; GUI mode: glyph uses compuni-glyph-face + annotation face + pixel-padded spacer.
     (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t))
-              ((symbol-function 'string-pixel-width) (lambda (_s) 8)))
+              ((symbol-function 'string-pixel-width) (lambda (_s) 8))
+              ((symbol-function 'compuni--glyph-scale-for-char) (lambda (_ch _h) 0.6)))
       (let ((m (compuni--format-margin cand nil)))
         (should (equal (substring-no-properties m) " λ "))
         (should (equal (get-text-property 1 'face m)
-                       '(compuni-glyph-face company-tooltip-annotation company-tooltip)))
+                       '((:height 0.6) compuni-glyph-face
+                         company-tooltip-annotation company-tooltip)))
         (should (equal (get-text-property 2 'display m)
                        '(space :width (16)))))
       (let ((m-sel (compuni--format-margin cand t)))
         (should (equal (get-text-property 1 'face m-sel)
-                       '(compuni-glyph-face
-                         company-tooltip-annotation-selection
-                         company-tooltip-selection)))))))
+                       '((:height 0.6) compuni-glyph-face
+                         company-tooltip-annotation-selection company-tooltip-selection)))))))
 
 ;;; Incremental Narrowing Tests
 
