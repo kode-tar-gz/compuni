@@ -12,6 +12,7 @@ When one of these commands is used, it creates a cache of symbols and font heigh
 
 ## Usage
 Compuni isn't on any package repositories yet, so you gotta clone this repo and load it yourself.
+
 Example configuration with `use-package`:
 ```elisp
 (use-package compuni
@@ -33,7 +34,7 @@ Compuni in action:
 ## Customization
 Compuni can be customized through these two variable:
 * `compuni-max-candidates` : maximum number of candidates returned per query *(default: 50)*.
-* `compuni-glyph-face` : face applied to glyphs in the left margin *(overrides company-tooltip-annotation foreground/style if customized)*.
+* `compuni-glyph-face` : face applied to glyphs in the left margin *(overrides `company-tooltip-annotation` foreground/style if customized)*.
 
 ## LLM usage
 **DISCLAIMER:** This package was made with lots of AI assistance. The tests were almost entirely written by an LLM and the main file was written with lots of assistance as well. This README was completely written by me however, if you care.
